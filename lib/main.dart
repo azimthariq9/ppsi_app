@@ -8,6 +8,7 @@ import 'screens/pengaduan_screen.dart';
 import 'screens/permohonan_surat_screen.dart';
 import 'screens/galeri_screen.dart';
 import 'screens/umkm_screen.dart';
+import 'screens/pembayaran_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -73,6 +74,7 @@ class MyApp extends StatelessWidget {
         '/permohonan-surat': (context) => const PermohonanSuratScreen(),
         '/galeri': (context) => const GaleriScreen(),
         '/umkm': (context) => const UMKMScreen(),
+        '/pembayaran': (context) => const PembayaranScreen(),
       },
     );
   }
