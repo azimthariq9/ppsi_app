@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'screens/home_screen.dart';
+import 'widgets/main_navigation.dart';
 import 'screens/profil_rt_screen.dart';
 import 'screens/pengumuman_screen.dart';
 import 'screens/kegiatan_screen.dart';
@@ -8,7 +8,6 @@ import 'screens/pengaduan_screen.dart';
 import 'screens/permohonan_surat_screen.dart';
 import 'screens/galeri_screen.dart';
 import 'screens/umkm_screen.dart';
-import 'screens/pembayaran_screen.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -32,6 +31,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
+        fontFamily: 'Roboto',
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF2D6A4F),
           primary: const Color(0xFF2D6A4F),
@@ -43,6 +43,10 @@ class MyApp extends StatelessWidget {
           foregroundColor: Colors.white,
           elevation: 0,
           centerTitle: false,
+          systemOverlayStyle: SystemUiOverlayStyle(
+            statusBarColor: Colors.transparent,
+            statusBarIconBrightness: Brightness.light,
+          ),
           titleTextStyle: TextStyle(
             fontFamily: 'Roboto',
             fontSize: 17,
@@ -50,23 +54,20 @@ class MyApp extends StatelessWidget {
             color: Colors.white,
           ),
         ),
-        drawerTheme: const DrawerThemeData(
-          backgroundColor: Colors.white,
-          elevation: 4,
-        ),
         scaffoldBackgroundColor: const Color(0xFFF0FAF4),
         cardTheme: CardThemeData(
           elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
         snackBarTheme: const SnackBarThemeData(
           behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.all(Radius.circular(10))),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.all(Radius.circular(12))),
         ),
       ),
       initialRoute: '/',
       routes: {
-        '/': (context) => const HomeScreen(),
+        '/': (context) => const MainNavigation(),
         '/profil': (context) => const ProfilRTScreen(),
         '/pengumuman': (context) => const PengumumanScreen(),
         '/kegiatan': (context) => const KegiatanScreen(),
@@ -74,7 +75,6 @@ class MyApp extends StatelessWidget {
         '/permohonan-surat': (context) => const PermohonanSuratScreen(),
         '/galeri': (context) => const GaleriScreen(),
         '/umkm': (context) => const UMKMScreen(),
-        '/pembayaran': (context) => const PembayaranScreen(),
       },
     );
   }
