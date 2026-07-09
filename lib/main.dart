@@ -1,22 +1,28 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'widgets/main_navigation.dart';
-import 'screens/profil_rt_screen.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:provider/provider.dart';
+
+import 'firebase_options.dart';
+import 'providers/providers.dart';
+import 'screens/auth_wrapper.dart';
+import 'screens/login_screen.dart';
+import 'screens/main_shell.dart';
+import 'screens/admin/admin_dashboard_screen.dart';
+
 import 'screens/pengumuman_screen.dart';
 import 'screens/kegiatan_screen.dart';
 import 'screens/pengaduan_screen.dart';
 import 'screens/permohonan_surat_screen.dart';
-import 'screens/galeri_screen.dart';
+import 'screens/profil_rt_screen.dart';
 import 'screens/umkm_screen.dart';
+import 'screens/pembayaran_screen.dart';
+import 'screens/galeri_screen.dart';
+import 'screens/notifikasi_screen.dart';
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  SystemChrome.setSystemUIOverlayStyle(
-    const SystemUiOverlayStyle(
-      statusBarColor: Colors.transparent,
-      statusBarIconBrightness: Brightness.light,
-    ),
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
   );
   runApp(const MyApp());
 }
@@ -26,56 +32,34 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'RT 03 RW 011',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        fontFamily: 'Roboto',
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF2D6A4F),
-          primary: const Color(0xFF2D6A4F),
-          secondary: const Color(0xFF52B788),
-          surface: Colors.white,
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Color(0xFF2D6A4F),
-          foregroundColor: Colors.white,
-          elevation: 0,
-          centerTitle: false,
-          systemOverlayStyle: SystemUiOverlayStyle(
-            statusBarColor: Colors.transparent,
-            statusBarIconBrightness: Brightness.light,
-          ),
-          titleTextStyle: TextStyle(
-            fontFamily: 'Roboto',
-            fontSize: 17,
-            fontWeight: FontWeight.w700,
-            color: Colors.white,
-          ),
-        ),
-        scaffoldBackgroundColor: const Color(0xFFF0FAF4),
-        cardTheme: CardThemeData(
-          elevation: 0,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        ),
-        snackBarTheme: const SnackBarThemeData(
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.all(Radius.circular(12))),
-        ),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => AuthProvider()),
+        ChangeNotifierProvider(create: (_) => PembayaranProvider()),
+        ChangeNotifierProvider(create: (_) => PengaduanProvider()),
+        ChangeNotifierProvider(create: (_) => SuratProvider()),
+        ChangeNotifierProvider(create: (_) => UMKMProvider()),
+      ],
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'RT 03 RW 011',
+        home: const AuthWrapper(),
+        routes: {
+          '/login': (context) => const LoginScreen(),
+          '/home': (context) => const MainShell(),
+          '/admin': (context) => const AdminDashboardScreen(),
+
+          '/pengumuman': (context) => const PengumumanScreen(),
+          '/kegiatan': (context) => const KegiatanScreen(),
+          '/pengaduan': (context) => const PengaduanScreen(),
+          '/permohonan-surat': (context) => const PermohonanSuratScreen(),
+          '/profil-rt': (context) => const ProfilRTScreen(),
+          '/umkm': (context) => UMKMScreen(),
+          '/pembayaran': (context) => const PembayaranScreen(),
+          '/galeri': (context) => GaleriScreen(),
+          '/notifikasi': (context) => const NotifikasiScreen(role: 'warga'),
+        },
       ),
-      initialRoute: '/',
-      routes: {
-        '/': (context) => const MainNavigation(),
-        '/profil': (context) => const ProfilRTScreen(),
-        '/pengumuman': (context) => const PengumumanScreen(),
-        '/kegiatan': (context) => const KegiatanScreen(),
-        '/pengaduan': (context) => const PengaduanScreen(),
-        '/permohonan-surat': (context) => const PermohonanSuratScreen(),
-        '/galeri': (context) => const GaleriScreen(),
-        '/umkm': (context) => const UMKMScreen(),
-      },
     );
   }
 }

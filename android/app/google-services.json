@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "65963028144",
+    "project_id": "rt03-rw011",
+    "storage_bucket": "rt03-rw011.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:65963028144:android:e9fba613f020191b125575",
+        "android_client_info": {
+          "package_name": "com.example.coba_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDqW7JmWG7vW4C_OAHG1ABbWDJib_67MiE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

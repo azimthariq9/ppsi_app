@@ -1,6 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../utils/app_colors.dart';
+import '../models/models.dart';
+import '../services/firestore_service.dart';
+import '../widgets/notification_bell.dart';
+import '../widgets/app_logo.dart';
+import '../widgets/app_drawer.dart';
+import '../widgets/hover_scale.dart';
+import '../widgets/running_text_pembayaran.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -10,10 +19,29 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final FirestoreService _db = FirestoreService();
+  String _namaUser = 'Warga';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNamaUser();
+  }
+
+  Future<void> _loadNamaUser() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+    final user = await _db.getUser(uid);
+    if (mounted && user != null) {
+      setState(() => _namaUser = user.nama);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bgGreen,
+      drawer: const AppDrawer(currentRoute: '/home'),
       body: CustomScrollView(
         physics: const BouncingScrollPhysics(),
         slivers: [
@@ -23,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 _buildHeroCard(),
+                const PembayaranRunningText(),
                 _buildQuickStats(),
                 _buildQuickActions(context),
                 _buildPengumumanSection(context),
@@ -41,7 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildAppBar() {
     return SliverAppBar(
       automaticallyImplyLeading: false,
-      backgroundColor: AppColors.primaryGreen,
+      backgroundColor: AppColors.darkGreen,
       pinned: true,
       floating: false,
       elevation: 0,
@@ -49,16 +78,22 @@ class _HomeScreenState extends State<HomeScreen> {
         statusBarColor: Colors.transparent,
         statusBarIconBrightness: Brightness.light,
       ),
+      flexibleSpace: const DecoratedBox(
+        decoration: BoxDecoration(gradient: AppColors.futuristicGradient),
+      ),
+      leadingWidth: 40,
+      leading: Padding(
+        padding: const EdgeInsets.only(left: 8),
+        child: Builder(
+          builder: (ctx) => HoverScale(
+            onTap: () => Scaffold.of(ctx).openDrawer(),
+            child: const Icon(Icons.menu_rounded, color: Colors.white),
+          ),
+        ),
+      ),
       title: Row(
         children: [
-          Container(
-            width: 36,
-            height: 36,
-            decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-            child: const Center(
-              child: Icon(Icons.home_work_rounded, color: AppColors.primaryGreen, size: 17),
-            ),
-          ),
+          const AppLogo(size: 34, withRing: false),
           const SizedBox(width: 10),
           const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -71,24 +106,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      actions: [
-        IconButton(
-          icon: Stack(
-            children: [
-              const Icon(Icons.notifications_outlined, color: Colors.white, size: 24),
-              Positioned(
-                top: 0,
-                right: 0,
-                child: Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(color: Color(0xFFFF6B6B), shape: BoxShape.circle),
-                ),
-              ),
-            ],
-          ),
-          onPressed: () {},
-        ),
+      actions: const [
+        NotificationBell(role: 'warga'),
+        SizedBox(width: 4),
       ],
     );
   }
@@ -99,11 +119,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF1B4332), Color(0xFF2D6A4F), Color(0xFF40916C)],
-        ),
+        gradient: AppColors.futuristicGradient,
         borderRadius: BorderRadius.circular(22),
         boxShadow: [
           BoxShadow(
@@ -111,6 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
             blurRadius: 20,
             offset: const Offset(0, 8),
           ),
+          ...AppColors.glowShadow(opacity: 0.18),
         ],
       ),
       child: Stack(
@@ -164,8 +181,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                const Text('Selamat Datang,\nWarga RT 03! 👋',
-                    style: TextStyle(
+                Text('Selamat Datang,\n$_namaUser! 👋',
+                    style: const TextStyle(
                       color: Colors.white,
                       fontSize: 22,
                       fontWeight: FontWeight.w900,
@@ -219,8 +236,11 @@ class _HomeScreenState extends State<HomeScreen> {
     required bool filled,
   }) {
     return Expanded(
-      child: GestureDetector(
+      child: HoverScale(
         onTap: onTap,
+        enableHoverGlow: filled,
+        glowColor: Colors.white,
+        borderRadius: BorderRadius.circular(12),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration: BoxDecoration(
@@ -253,16 +273,53 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildQuickStats() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
-      child: Row(
-        children: [
-          _statChip(Icons.people_alt_rounded, '66', 'KK'),
-          const SizedBox(width: 10),
-          _statChip(Icons.person_rounded, '216', 'Jiwa'),
-          const SizedBox(width: 10),
-          _statChip(Icons.campaign_rounded, '4', 'Pengumuman'),
-          const SizedBox(width: 10),
-          _statChip(Icons.store_rounded, '4', 'UMKM'),
-        ],
+      child: StreamBuilder<DocumentSnapshot>(
+        stream: FirebaseFirestore.instance.collection('rt_info').doc('main').snapshots(),
+        builder: (context, rtSnap) {
+          final jumlahKK = rtSnap.hasData && rtSnap.data!.exists
+              ? ((rtSnap.data!.data() as Map<String, dynamic>)['jumlah_kk'] ?? 0).toString()
+              : '-';
+          final jumlahPria = rtSnap.hasData && rtSnap.data!.exists
+              ? ((rtSnap.data!.data() as Map<String, dynamic>)['jumlah_pria'] ?? 0) as int
+              : 0;
+          final jumlahWanita = rtSnap.hasData && rtSnap.data!.exists
+              ? ((rtSnap.data!.data() as Map<String, dynamic>)['jumlah_wanita'] ?? 0) as int
+              : 0;
+          final jumlahJiwa = (jumlahPria + jumlahWanita).toString();
+
+          return StreamBuilder<QuerySnapshot>(
+            stream: FirebaseFirestore.instance.collection('pengumuman').snapshots(),
+            builder: (context, pengumumanSnap) {
+              final jumlahPengumuman = pengumumanSnap.hasData
+                  ? pengumumanSnap.data!.docs.length.toString()
+                  : '-';
+
+              return StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('umkm')
+                    .where('is_active', isEqualTo: true)
+                    .snapshots(),
+                builder: (context, umkmSnap) {
+                  final jumlahUmkm = umkmSnap.hasData
+                      ? umkmSnap.data!.docs.length.toString()
+                      : '-';
+
+                  return Row(
+                    children: [
+                      _statChip(Icons.people_alt_rounded, jumlahKK, 'KK'),
+                      const SizedBox(width: 10),
+                      _statChip(Icons.person_rounded, jumlahJiwa, 'Jiwa'),
+                      const SizedBox(width: 10),
+                      _statChip(Icons.campaign_rounded, jumlahPengumuman, 'Pengumuman'),
+                      const SizedBox(width: 10),
+                      _statChip(Icons.store_rounded, jumlahUmkm, 'UMKM'),
+                    ],
+                  );
+                },
+              );
+            },
+          );
+        },
       ),
     );
   }
@@ -307,8 +364,7 @@ class _HomeScreenState extends State<HomeScreen> {
       {'icon': Icons.description_rounded, 'label': 'Surat', 'route': '/permohonan-surat', 'color': const Color(0xFFF3E5F5), 'iconColor': const Color(0xFF6A1B9A)},
       {'icon': Icons.photo_library_rounded, 'label': 'Galeri', 'route': '/galeri', 'color': const Color(0xFFE0F7FA), 'iconColor': const Color(0xFF00695C)},
       {'icon': Icons.store_rounded, 'label': 'UMKM', 'route': '/umkm', 'color': const Color(0xFFFFF3E0), 'iconColor': const Color(0xFFE65100)},
-      {'icon': Icons.people_alt_rounded, 'label': 'Profil RT', 'route': '/profil', 'color': const Color(0xFFE8F5E9), 'iconColor': AppColors.primaryGreen},
-      {'icon': Icons.qr_code_scanner_rounded, 'label': 'Bayar Iuran', 'route': '/bayar', 'color': const Color(0xFFE8F5E9), 'iconColor': AppColors.darkGreen},
+      {'icon': Icons.people_alt_rounded, 'label': 'Profil RT', 'route': '/profil-rt', 'color': const Color(0xFFE8F5E9), 'iconColor': AppColors.primaryGreen},
     ];
 
     return Column(
@@ -334,23 +390,11 @@ class _HomeScreenState extends State<HomeScreen> {
           itemCount: actions.length,
           itemBuilder: (context, i) {
             final a = actions[i];
-            final isBayar = a['route'] == '/bayar';
-            return GestureDetector(
-              onTap: () {
-                HapticFeedback.lightImpact();
-                if (isBayar) {
-                  // Navigate to payment tab via parent - just push named route simulation
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Buka tab Bayar di bawah'),
-                      backgroundColor: AppColors.primaryGreen,
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
-                  return;
-                }
-                Navigator.pushNamed(context, a['route'] as String);
-              },
+            return HoverScale(
+              enableHoverGlow: true,
+              glowColor: a['iconColor'] as Color,
+              borderRadius: BorderRadius.circular(16),
+              onTap: () => Navigator.pushNamed(context, a['route'] as String),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -358,11 +402,11 @@ class _HomeScreenState extends State<HomeScreen> {
                     width: 56,
                     height: 56,
                     decoration: BoxDecoration(
-                      color: isBayar ? AppColors.primaryGreen : a['color'] as Color,
+                      color: a['color'] as Color,
                       borderRadius: BorderRadius.circular(16),
                       boxShadow: [
                         BoxShadow(
-                          color: (isBayar ? AppColors.primaryGreen : a['iconColor'] as Color).withOpacity(0.2),
+                          color: (a['iconColor'] as Color).withOpacity(0.2),
                           blurRadius: 8,
                           offset: const Offset(0, 3),
                         ),
@@ -370,7 +414,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     child: Icon(
                       a['icon'] as IconData,
-                      color: isBayar ? Colors.white : a['iconColor'] as Color,
+                      color: a['iconColor'] as Color,
                       size: 24,
                     ),
                   ),
@@ -378,10 +422,10 @@ class _HomeScreenState extends State<HomeScreen> {
                   Text(
                     a['label'] as String,
                     textAlign: TextAlign.center,
-                    style: TextStyle(
+                    style: const TextStyle(
                       fontSize: 11,
                       fontWeight: FontWeight.w600,
-                      color: isBayar ? AppColors.primaryGreen : AppColors.textDark,
+                      color: AppColors.textDark,
                     ),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
@@ -397,13 +441,23 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ── PENGUMUMAN TERBARU ────────────────────────────────────────────────────
 
-  Widget _buildPengumumanSection(BuildContext context) {
-    final items = [
-      {'title': 'FORM MUDIK WARGA', 'date': '15 Mar 2026', 'cat': 'Informasi', 'catColor': const Color(0xFF1565C0), 'bgColor': const Color(0xFFE3F2FD)},
-      {'title': 'Kerja Bakti Fasos Fasum', 'date': '15 Feb 2026', 'cat': 'Kegiatan', 'catColor': const Color(0xFF2E7D32), 'bgColor': const Color(0xFFE8F5E9)},
-      {'title': 'Kawasan Wajib Belajar', 'date': '11 Feb 2026', 'cat': 'Kebijakan', 'catColor': const Color(0xFFE65100), 'bgColor': const Color(0xFFFFF3E0)},
-    ];
+  static const Map<String, Color> _kategoriColor = {
+    'Informasi': Color(0xFF1565C0),
+    'Kegiatan': Color(0xFF2E7D32),
+    'Kebijakan': Color(0xFFE65100),
+    'Keuangan': Color(0xFF6A1B9A),
+    'Kesehatan': Color(0xFFC62828),
+  };
 
+  String _formatTanggal(DateTime date) {
+    const bulan = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
+      'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'
+    ];
+    return '${date.day} ${bulan[date.month - 1]} ${date.year}';
+  }
+
+  Widget _buildPengumumanSection(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -422,82 +476,104 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
-        SizedBox(
-          height: 148,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
-            itemCount: items.length,
-            itemBuilder: (context, i) {
-              final item = items[i];
-              return GestureDetector(
-                onTap: () => Navigator.pushNamed(context, '/pengumuman'),
-                child: Container(
-                  width: 230,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(18),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 3)),
-                    ],
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: (item['catColor'] as Color).withOpacity(0.12),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                item['cat'] as String,
-                                style: TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: item['catColor'] as Color,
-                                ),
-                              ),
-                            ),
-                            const Spacer(),
-                            Text(item['date'] as String,
-                                style: const TextStyle(fontSize: 10.5, color: AppColors.textGrey)),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        Text(
-                          item['title'] as String,
-                          style: const TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textDark,
-                            height: 1.3,
-                          ),
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        const Spacer(),
-                        Row(
-                          children: [
-                            const Text('Baca selengkapnya',
-                                style: TextStyle(
-                                    fontSize: 12, color: AppColors.primaryGreen, fontWeight: FontWeight.w600)),
-                            const SizedBox(width: 4),
-                            const Icon(Icons.arrow_forward_rounded, size: 12, color: AppColors.primaryGreen),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
+        StreamBuilder<List<PengumumanModel>>(
+          stream: _db.streamPengumuman(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const SizedBox(
+                height: 148,
+                child: Center(child: CircularProgressIndicator(color: AppColors.primaryGreen)),
+              );
+            }
+            final items = snapshot.data!.take(5).toList();
+            if (items.isEmpty) {
+              return const SizedBox(
+                height: 80,
+                child: Center(
+                  child: Text('Belum ada pengumuman',
+                      style: TextStyle(color: AppColors.textGrey, fontSize: 13)),
                 ),
               );
-            },
-          ),
+            }
+            return SizedBox(
+              height: 148,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                separatorBuilder: (_, __) => const SizedBox(width: 12),
+                itemCount: items.length,
+                itemBuilder: (context, i) {
+                  final item = items[i];
+                  final catColor = _kategoriColor[item.kategori] ?? AppColors.primaryGreen;
+                  return GestureDetector(
+                    onTap: () => Navigator.pushNamed(context, '/pengumuman'),
+                    child: Container(
+                      width: 230,
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(18),
+                        boxShadow: [
+                          BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, 3)),
+                        ],
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: catColor.withOpacity(0.12),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    item.kategori,
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      fontWeight: FontWeight.w700,
+                                      color: catColor,
+                                    ),
+                                  ),
+                                ),
+                                const Spacer(),
+                                Text(_formatTanggal(item.createdAt),
+                                    style: const TextStyle(fontSize: 10.5, color: AppColors.textGrey)),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            Text(
+                              item.judul,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.textDark,
+                                height: 1.3,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            const Spacer(),
+                            const Row(
+                              children: [
+                                Text('Baca selengkapnya',
+                                    style: TextStyle(
+                                        fontSize: 12, color: AppColors.primaryGreen, fontWeight: FontWeight.w600)),
+                                SizedBox(width: 4),
+                                Icon(Icons.arrow_forward_rounded, size: 12, color: AppColors.primaryGreen),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            );
+          },
         ),
       ],
     );
@@ -505,13 +581,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ── KEGIATAN MENDATANG ────────────────────────────────────────────────────
 
-  Widget _buildKegiatanSection(BuildContext context) {
-    final kegiatans = [
-      {'title': 'SISKAMLING WARGA', 'date': '15 Mar', 'jam': '00:00', 'icon': Icons.security_rounded, 'color': const Color(0xFF1565C0)},
-      {'title': 'Kerja Bakti Fasos Fasum', 'date': '15 Feb', 'jam': '07:00', 'icon': Icons.cleaning_services_rounded, 'color': const Color(0xFF2E7D32)},
-      {'title': 'Arisan Ibu-Ibu RT', 'date': '08 Feb', 'jam': '16:39', 'icon': Icons.groups_rounded, 'color': const Color(0xFF880E4F)},
-    ];
+  static const List<Color> _kegiatanColors = [
+    Color(0xFF1565C0), Color(0xFF2E7D32), Color(0xFF880E4F),
+    Color(0xFFE65100), Color(0xFF6A1B9A),
+  ];
 
+  Widget _buildKegiatanSection(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -530,76 +605,98 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
         ),
-        ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          padding: const EdgeInsets.symmetric(horizontal: 16),
-          separatorBuilder: (_, __) => const SizedBox(height: 10),
-          itemCount: kegiatans.length,
-          itemBuilder: (context, i) {
-            final k = kegiatans[i];
-            return GestureDetector(
-              onTap: () => Navigator.pushNamed(context, '/kegiatan'),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
-                  ],
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: (k['color'] as Color).withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: Icon(k['icon'] as IconData, color: k['color'] as Color, size: 22),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(k['title'] as String,
-                                style: const TextStyle(
-                                    fontSize: 13.5, fontWeight: FontWeight.w700, color: AppColors.textDark)),
-                            const SizedBox(height: 5),
-                            Row(
+        StreamBuilder<List<KegiatanModel>>(
+          stream: _db.streamKegiatanMendatang(),
+          builder: (context, snapshot) {
+            if (!snapshot.hasData) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 20),
+                child: Center(child: CircularProgressIndicator(color: AppColors.primaryGreen)),
+              );
+            }
+            final kegiatans = snapshot.data!;
+            if (kegiatans.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Text('Belum ada agenda mendatang',
+                    style: TextStyle(color: AppColors.textGrey, fontSize: 13)),
+              );
+            }
+            return ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              separatorBuilder: (_, __) => const SizedBox(height: 10),
+              itemCount: kegiatans.length,
+              itemBuilder: (context, i) {
+                final k = kegiatans[i];
+                final color = _kegiatanColors[i % _kegiatanColors.length];
+                return GestureDetector(
+                  onTap: () => Navigator.pushNamed(context, '/kegiatan'),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      boxShadow: [
+                        BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
+                      ],
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: color.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: Icon(Icons.event_rounded, color: color, size: 22),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Icon(Icons.calendar_today_rounded, size: 11, color: AppColors.textGrey),
-                                const SizedBox(width: 4),
-                                Text(k['date'] as String,
-                                    style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
-                                const SizedBox(width: 12),
-                                const Icon(Icons.access_time_rounded, size: 11, color: AppColors.textGrey),
-                                const SizedBox(width: 4),
-                                Text(k['jam'] as String,
-                                    style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
+                                Text(k.namaKegiatan,
+                                    style: const TextStyle(
+                                        fontSize: 13.5, fontWeight: FontWeight.w700, color: AppColors.textDark),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                                const SizedBox(height: 5),
+                                Row(
+                                  children: [
+                                    const Icon(Icons.calendar_today_rounded, size: 11, color: AppColors.textGrey),
+                                    const SizedBox(width: 4),
+                                    Text(_formatTanggal(k.tanggal),
+                                        style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
+                                    const SizedBox(width: 12),
+                                    const Icon(Icons.access_time_rounded, size: 11, color: AppColors.textGrey),
+                                    const SizedBox(width: 4),
+                                    Text(k.jam,
+                                        style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
+                                  ],
+                                ),
                               ],
                             ),
-                          ],
-                        ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: AppColors.lightGreen,
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Text('Detail',
+                                style: TextStyle(
+                                    fontSize: 11.5, fontWeight: FontWeight.w700, color: AppColors.primaryGreen)),
+                          ),
+                        ],
                       ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                        decoration: BoxDecoration(
-                          color: AppColors.lightGreen,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: const Text('Detail',
-                            style: TextStyle(
-                                fontSize: 11.5, fontWeight: FontWeight.w700, color: AppColors.primaryGreen)),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
             );
           },
         ),

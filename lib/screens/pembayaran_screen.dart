@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../utils/app_colors.dart';
+import '../models/models.dart';
+import '../services/firestore_service.dart';
+import '../services/storage_service.dart';
 
 class PembayaranScreen extends StatefulWidget {
   const PembayaranScreen({super.key});
@@ -13,8 +17,26 @@ class _PembayaranScreenState extends State<PembayaranScreen>
     with SingleTickerProviderStateMixin {
   int _methodIndex = 0; // 0=QRIS, 1=Transfer, 2=Tunai
   bool _isScanning = false;
+  bool _isUploading = false;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
+
+  final FirestoreService _db = FirestoreService();
+  final StorageService _storage = StorageService();
+
+  String get _bulanIni {
+    final now = DateTime.now();
+    return '${now.year}-${now.month.toString().padLeft(2, '0')}';
+  }
+
+  String get _bulanIniLabel {
+    const bulan = [
+      'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+      'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+    ];
+    final now = DateTime.now();
+    return '${bulan[now.month - 1]} ${now.year}';
+  }
 
   @override
   void initState() {
@@ -34,13 +56,59 @@ class _PembayaranScreenState extends State<PembayaranScreen>
     super.dispose();
   }
 
-  void _doScan() async {
+  Future<void> _doScanAndUpload() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
     HapticFeedback.mediumImpact();
+
+    final file = await _storage.pickImage();
+    if (file == null) return;
+
     setState(() => _isScanning = true);
-    await Future.delayed(const Duration(seconds: 2));
-    if (!mounted) return;
-    setState(() => _isScanning = false);
-    _showScanResult();
+    await _submitBuktiBayar(file, 'QRIS');
+    if (mounted) setState(() => _isScanning = false);
+  }
+
+  Future<void> _pilihDanSubmitBukti(String metode) async {
+    final file = await _storage.pickImage();
+    if (file == null) return;
+    await _submitBuktiBayar(file, metode);
+  }
+
+  Future<void> _submitBuktiBayar(PickedFile file, String metode) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return;
+
+    setState(() => _isUploading = true);
+
+    try {
+      final user = await _db.getUser(uid);
+      final url = await _storage.uploadBuktiBayar(uid, _bulanIni, file);
+
+      await _db.createPembayaran(PembayaranModel(
+        id: '',
+        userId: uid,
+        namaWarga: user?.nama ?? 'Warga',
+        jenisIuran: 'Iuran Bulanan',
+        nominal: 50000,
+        bulan: _bulanIni,
+        status: 'menunggu_verifikasi',
+        metodeBayar: metode,
+        buktiBayarUrl: url,
+        createdAt: DateTime.now(),
+      ));
+
+      if (!mounted) return;
+      _showScanResult();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Gagal mengirim bukti bayar: $e'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _isUploading = false);
+    }
   }
 
   void _showScanResult() {
@@ -67,6 +135,8 @@ class _PembayaranScreenState extends State<PembayaranScreen>
 
   @override
   Widget build(BuildContext context) {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       body: Column(
@@ -77,16 +147,15 @@ class _PembayaranScreenState extends State<PembayaranScreen>
               physics: const BouncingScrollPhysics(),
               child: Column(
                 children: [
-                  _buildTagihanCard(),
+                  _buildTagihanCard(uid),
                   _buildMethodSelector(),
                   _buildPaymentContent(),
-                  _buildRiwayatSection(),
+                  _buildRiwayatSection(uid),
                   const SizedBox(height: 24),
                 ],
               ),
             ),
           ),
-          _buildConfirmButton(),
         ],
       ),
     );
@@ -106,10 +175,9 @@ class _PembayaranScreenState extends State<PembayaranScreen>
       child: SafeArea(
         bottom: false,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+          padding: const EdgeInsets.fromLTRB(20, 8, 16, 20),
           child: Row(
             children: [
-              const SizedBox(width: 8),
               Container(
                 width: 38,
                 height: 38,
@@ -131,10 +199,6 @@ class _PembayaranScreenState extends State<PembayaranScreen>
                   ],
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.history_rounded, color: Colors.white, size: 22),
-                onPressed: () {},
-              ),
             ],
           ),
         ),
@@ -144,7 +208,7 @@ class _PembayaranScreenState extends State<PembayaranScreen>
 
   // ── TAGIHAN CARD ──────────────────────────────────────────────────────────
 
-  Widget _buildTagihanCard() {
+  Widget _buildTagihanCard(String? uid) {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       decoration: BoxDecoration(
@@ -158,99 +222,110 @@ class _PembayaranScreenState extends State<PembayaranScreen>
           ),
         ],
       ),
-      child: Column(
-        children: [
-          // Top info
-          Padding(
-            padding: const EdgeInsets.all(18),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      child: FutureBuilder<PembayaranModel?>(
+        future: uid != null ? _db.getPembayaranBulanIni(uid, _bulanIni) : Future.value(null),
+        builder: (context, snapshot) {
+          final pembayaran = snapshot.data;
+          final isLunas = pembayaran?.status == 'lunas';
+          final isMenunggu = pembayaran?.status == 'menunggu_verifikasi';
+
+          String statusText = 'Belum Lunas';
+          Color statusColor = const Color(0xFFE65100);
+          Color statusBg = const Color(0xFFFFF3E0);
+          IconData statusIcon = Icons.pending_rounded;
+
+          if (isLunas) {
+            statusText = 'Lunas';
+            statusColor = AppColors.primaryGreen;
+            statusBg = const Color(0xFFE8F5E9);
+            statusIcon = Icons.check_circle_rounded;
+          } else if (isMenunggu) {
+            statusText = 'Menunggu Verifikasi';
+            statusColor = const Color(0xFF1565C0);
+            statusBg = const Color(0xFFE3F2FD);
+            statusIcon = Icons.hourglass_top_rounded;
+          }
+
+          return Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(18),
+                child: Column(
                   children: [
-                    const Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Total Tagihan',
-                            style: TextStyle(color: AppColors.textGrey, fontSize: 12.5, fontWeight: FontWeight.w500)),
-                        SizedBox(height: 4),
-                        Text('Rp 50.000',
-                            style: TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w900,
-                              color: AppColors.darkGreen,
-                              letterSpacing: -0.5,
-                            )),
+                        const Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Total Tagihan',
+                                style: TextStyle(color: AppColors.textGrey, fontSize: 12.5, fontWeight: FontWeight.w500)),
+                            SizedBox(height: 4),
+                            Text('Rp 50.000',
+                                style: TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppColors.darkGreen,
+                                  letterSpacing: -0.5,
+                                )),
+                          ],
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: statusBg,
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: statusColor.withOpacity(0.5)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(statusIcon, color: statusColor, size: 13),
+                              const SizedBox(width: 5),
+                              Text(statusText,
+                                  style: TextStyle(
+                                      fontSize: 11.5, fontWeight: FontWeight.w700, color: statusColor)),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
+                    const SizedBox(height: 14),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFFFF3E0),
-                        borderRadius: BorderRadius.circular(20),
-                        border: Border.all(color: const Color(0xFFFFCC02).withOpacity(0.5)),
+                        color: AppColors.bgGreen,
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                      child: const Row(
-                        mainAxisSize: MainAxisSize.min,
+                      child: Row(
                         children: [
-                          Icon(Icons.pending_rounded, color: Color(0xFFE65100), size: 13),
-                          SizedBox(width: 5),
-                          Text('Belum Lunas',
-                              style: TextStyle(
-                                  fontSize: 11.5, fontWeight: FontWeight.w700, color: Color(0xFFE65100))),
+                          _tagihanDetail(Icons.calendar_month_rounded, 'Periode', _bulanIniLabel),
+                          _vDivider(),
+                          _tagihanDetail(Icons.home_work_rounded, 'Untuk', 'RT 03/011'),
+                          _vDivider(),
+                          _tagihanDetail(Icons.account_balance_wallet_rounded, 'Jenis', 'Iuran Rutin'),
                         ],
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 14),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: AppColors.bgGreen,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    children: [
-                      _tagihanDetail(Icons.calendar_month_rounded, 'Periode', 'Mei 2026'),
-                      _vDivider(),
-                      _tagihanDetail(Icons.home_work_rounded, 'Untuk', 'RT 03/011'),
-                      _vDivider(),
-                      _tagihanDetail(Icons.account_balance_wallet_rounded, 'Jenis', 'Iuran Rutin'),
-                    ],
-                  ),
+              ),
+              Divider(color: Colors.grey.shade100, height: 1),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.access_time_rounded, color: Color(0xFFE65100), size: 14),
+                    const SizedBox(width: 6),
+                    const Text('Jatuh tempo: ', style: TextStyle(color: AppColors.textGrey, fontSize: 12)),
+                    const Text('Tanggal 10',
+                        style: TextStyle(color: Color(0xFFE65100), fontSize: 12, fontWeight: FontWeight.w700)),
+                  ],
                 ),
-              ],
-            ),
-          ),
-          // Divider
-          Divider(color: Colors.grey.shade100, height: 1),
-          // Due date
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-            child: Row(
-              children: [
-                const Icon(Icons.access_time_rounded, color: Color(0xFFE65100), size: 14),
-                const SizedBox(width: 6),
-                const Text('Jatuh tempo: ', style: TextStyle(color: AppColors.textGrey, fontSize: 12)),
-                const Text('31 Mei 2026',
-                    style: TextStyle(color: Color(0xFFE65100), fontSize: 12, fontWeight: FontWeight.w700)),
-                const Spacer(),
-                GestureDetector(
-                  onTap: () {},
-                  child: const Row(
-                    children: [
-                      Text('Cek riwayat',
-                          style: TextStyle(color: AppColors.primaryGreen, fontSize: 12, fontWeight: FontWeight.w600)),
-                      SizedBox(width: 2),
-                      Icon(Icons.arrow_forward_ios_rounded, size: 10, color: AppColors.primaryGreen),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -365,7 +440,6 @@ class _PembayaranScreenState extends State<PembayaranScreen>
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // Header row
             Row(
               children: [
                 Container(
@@ -386,11 +460,9 @@ class _PembayaranScreenState extends State<PembayaranScreen>
             ),
             const SizedBox(height: 20),
 
-            // QR Code Frame
             Stack(
               alignment: Alignment.center,
               children: [
-                // QR Frame
                 Container(
                   width: 220,
                   height: 220,
@@ -410,60 +482,23 @@ class _PembayaranScreenState extends State<PembayaranScreen>
                       ),
                     ],
                   ),
-                  child: Stack(
-                    children: [
-                      // QR placeholder (actual QR image from assets)
-                      Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: _isScanning
-                            ? const Center(
-                                child: CircularProgressIndicator(
-                                  color: AppColors.primaryGreen,
-                                  strokeWidth: 3,
-                                ),
-                              )
-                            : Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  // QR corner markers
-                                  _QRCornerMarkers(),
-                                  // QR image - uses asset
-                                  Expanded(
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(8),
-                                      child: Image.asset(
-                                        'assets/qris.png',
-                                        fit: BoxFit.contain,
-                                        errorBuilder: (_, __, ___) => _buildQRFallback(),
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                      ),
-                      // Scan overlay line animation
-                      if (_isScanning)
-                        AnimatedBuilder(
-                          animation: _pulseAnimation,
-                          builder: (_, __) => Positioned(
-                            top: 110 * (_pulseAnimation.value - 0.9) * 10,
-                            left: 0,
-                            right: 0,
-                            child: Container(
-                              height: 2,
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    Colors.transparent,
-                                    AppColors.accentGreen.withOpacity(0.8),
-                                    Colors.transparent,
-                                  ],
-                                ),
-                              ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: _isScanning
+                        ? const Center(
+                            child: CircularProgressIndicator(
+                              color: AppColors.primaryGreen,
+                              strokeWidth: 3,
+                            ),
+                          )
+                        : ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.asset(
+                              'assets/qris.png',
+                              fit: BoxFit.contain,
+                              errorBuilder: (_, __, ___) => _buildQRFallback(),
                             ),
                           ),
-                        ),
-                    ],
                   ),
                 ),
               ],
@@ -471,31 +506,29 @@ class _PembayaranScreenState extends State<PembayaranScreen>
 
             const SizedBox(height: 12),
 
-            // Amount label
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
                 color: AppColors.bgGreen,
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Row(
+              child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(Icons.payments_rounded, size: 14, color: AppColors.accentGreen),
-                  SizedBox(width: 6),
-                  Text('Rp 50.000',
+                  const Icon(Icons.payments_rounded, size: 14, color: AppColors.accentGreen),
+                  const SizedBox(width: 6),
+                  const Text('Rp 50.000',
                       style: TextStyle(fontSize: 15, fontWeight: FontWeight.w900, color: AppColors.darkGreen)),
-                  SizedBox(width: 6),
-                  Text('· Mei 2026', style: TextStyle(fontSize: 12, color: AppColors.textGrey)),
+                  const SizedBox(width: 6),
+                  Text('· $_bulanIniLabel', style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
                 ],
               ),
             ),
 
             const SizedBox(height: 20),
 
-            // ── SCAN BUTTON (CENTER - MOBILE BANKING STYLE) ──────────────────
             GestureDetector(
-              onTap: _isScanning ? null : _doScan,
+              onTap: (_isScanning || _isUploading) ? null : _doScanAndUpload,
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 width: double.infinity,
@@ -527,7 +560,7 @@ class _PembayaranScreenState extends State<PembayaranScreen>
                     ),
                     const SizedBox(width: 10),
                     Text(
-                      _isScanning ? 'Memindai...' : 'Pindai QR Sekarang',
+                      _isScanning ? 'Mengunggah bukti...' : 'Upload Bukti Bayar QRIS',
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 15.5,
@@ -540,50 +573,9 @@ class _PembayaranScreenState extends State<PembayaranScreen>
               ),
             ),
 
-            const SizedBox(height: 14),
-
-            // Or divider
-            Row(
-              children: [
-                Expanded(child: Divider(color: Colors.grey.shade200)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Text('atau', style: TextStyle(color: Colors.grey.shade400, fontSize: 12)),
-                ),
-                Expanded(child: Divider(color: Colors.grey.shade200)),
-              ],
-            ),
-
-            const SizedBox(height: 14),
-
-            // Share QR button
-            GestureDetector(
-              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Menyimpan QR...'), backgroundColor: AppColors.primaryGreen),
-              ),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 13),
-                decoration: BoxDecoration(
-                  border: Border.all(color: AppColors.primaryGreen.withOpacity(0.4)),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.share_rounded, color: AppColors.primaryGreen, size: 18),
-                    SizedBox(width: 8),
-                    Text('Bagikan Kode QR',
-                        style: TextStyle(
-                            color: AppColors.primaryGreen, fontSize: 14, fontWeight: FontWeight.w700)),
-                  ],
-                ),
-              ),
-            ),
-
             const SizedBox(height: 12),
             const Text(
-              'Pastikan nominal pembayaran sudah sesuai sebelum melanjutkan.',
+              'Setelah membayar, unggah bukti pembayaran untuk diverifikasi admin.',
               textAlign: TextAlign.center,
               style: TextStyle(color: AppColors.textGrey, fontSize: 11.5, height: 1.4),
             ),
@@ -627,7 +619,6 @@ class _PembayaranScreenState extends State<PembayaranScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               children: [
                 Container(
@@ -651,14 +642,12 @@ class _PembayaranScreenState extends State<PembayaranScreen>
             ),
             const SizedBox(height: 20),
 
-            // Bank Card
             _bankAccountCard('BCA', '1234567890', 'RT 03 RW 011 Aren Jaya', const Color(0xFF1565C0)),
             const SizedBox(height: 12),
             _bankAccountCard('Mandiri', '9876543210', 'RT 03 RW 011 Aren Jaya', const Color(0xFF1B5E20)),
 
             const SizedBox(height: 20),
 
-            // Instructions
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
@@ -680,6 +669,36 @@ class _PembayaranScreenState extends State<PembayaranScreen>
                   const SizedBox(height: 10),
                   ..._transferSteps(),
                 ],
+              ),
+            ),
+
+            const SizedBox(height: 16),
+
+            GestureDetector(
+              onTap: _isUploading ? null : () => _pilihDanSubmitBukti('Transfer'),
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [Color(0xFF40916C), Color(0xFF1B4332)]),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: _isUploading
+                    ? const Center(
+                        child: SizedBox(
+                          width: 20, height: 20,
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                        ),
+                      )
+                    : const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.upload_file_rounded, color: Colors.white, size: 18),
+                          SizedBox(width: 8),
+                          Text('Upload Bukti Transfer',
+                              style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
+                        ],
+                      ),
               ),
             ),
           ],
@@ -751,7 +770,7 @@ class _PembayaranScreenState extends State<PembayaranScreen>
       'Transfer sesuai nominal tagihan (Rp 50.000)',
       'Tambahkan 3 digit kode unik: Rp 50.XXX',
       'Simpan bukti transfer',
-      'Konfirmasi ke ketua RT via WhatsApp',
+      'Upload bukti transfer di bawah ini',
     ];
     return steps.asMap().entries.map((e) {
       return Padding(
@@ -792,11 +811,10 @@ class _PembayaranScreenState extends State<PembayaranScreen>
         padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // Icon
             Container(
               width: 80,
               height: 80,
-              decoration: BoxDecoration(
+              decoration: const BoxDecoration(
                 color: AppColors.lightGreen,
                 shape: BoxShape.circle,
               ),
@@ -813,7 +831,6 @@ class _PembayaranScreenState extends State<PembayaranScreen>
             ),
             const SizedBox(height: 20),
 
-            // Info card
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(16),
@@ -835,35 +852,6 @@ class _PembayaranScreenState extends State<PembayaranScreen>
                 ],
               ),
             ),
-
-            const SizedBox(height: 14),
-
-            // WhatsApp button
-            GestureDetector(
-              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Membuka WhatsApp...'), backgroundColor: AppColors.primaryGreen),
-              ),
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF25D366),
-                  borderRadius: BorderRadius.circular(14),
-                  boxShadow: [
-                    BoxShadow(color: const Color(0xFF25D366).withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4)),
-                  ],
-                ),
-                child: const Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.chat_rounded, color: Colors.white, size: 18),
-                    SizedBox(width: 8),
-                    Text('Hubungi Ketua RT via WhatsApp',
-                        style: TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w700)),
-                  ],
-                ),
-              ),
-            ),
           ],
         ),
       ),
@@ -883,13 +871,22 @@ class _PembayaranScreenState extends State<PembayaranScreen>
 
   // ── RIWAYAT ───────────────────────────────────────────────────────────────
 
-  Widget _buildRiwayatSection() {
-    final riwayat = [
-      {'bulan': 'Apr 2026', 'status': 'Lunas', 'tgl': '03 Apr'},
-      {'bulan': 'Mar 2026', 'status': 'Lunas', 'tgl': '01 Mar'},
-      {'bulan': 'Feb 2026', 'status': 'Lunas', 'tgl': '28 Feb'},
-    ];
+  String _formatTanggalSingkat(DateTime? date) {
+    if (date == null) return '-';
+    const bulan = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    return '${date.day.toString().padLeft(2, '0')} ${bulan[date.month - 1]}';
+  }
 
+  String _formatBulanLabel(String bulanKode) {
+    const bulan = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+    final parts = bulanKode.split('-');
+    if (parts.length != 2) return bulanKode;
+    final bulanIdx = int.tryParse(parts[1]);
+    if (bulanIdx == null || bulanIdx < 1 || bulanIdx > 12) return bulanKode;
+    return '${bulan[bulanIdx - 1]} ${parts[0]}';
+  }
+
+  Widget _buildRiwayatSection(String? uid) {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 14, 16, 0),
       decoration: BoxDecoration(
@@ -904,24 +901,45 @@ class _PembayaranScreenState extends State<PembayaranScreen>
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('Riwayat Pembayaran',
-                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.darkGreen)),
-                Text('Lihat semua', style: TextStyle(fontSize: 12, color: AppColors.primaryGreen, fontWeight: FontWeight.w600)),
-              ],
-            ),
+            const Text('Riwayat Pembayaran',
+                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: AppColors.darkGreen)),
             const SizedBox(height: 14),
-            ...riwayat.map((r) => _riwayatRow(r['bulan']!, r['status']!, r['tgl']!)),
+            if (uid == null)
+              const Text('Belum login', style: TextStyle(color: AppColors.textGrey, fontSize: 13))
+            else
+              StreamBuilder<List<PembayaranModel>>(
+                stream: _db.streamPembayaranByUser(uid),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData) {
+                    return const Center(child: CircularProgressIndicator(color: AppColors.primaryGreen));
+                  }
+                  final items = snapshot.data!;
+                  if (items.isEmpty) {
+                    return const Text('Belum ada riwayat pembayaran',
+                        style: TextStyle(color: AppColors.textGrey, fontSize: 13));
+                  }
+                  return Column(
+                    children: items.map((r) => _riwayatRow(r)).toList(),
+                  );
+                },
+              ),
           ],
         ),
       ),
     );
   }
 
-  Widget _riwayatRow(String bulan, String status, String tgl) {
-    final isLunas = status == 'Lunas';
+  Widget _riwayatRow(PembayaranModel r) {
+    final isLunas = r.status == 'lunas';
+    final isMenunggu = r.status == 'menunggu_verifikasi';
+    final statusLabel = isLunas ? 'Lunas' : (isMenunggu ? 'Diperiksa' : 'Belum');
+    final statusColor = isLunas
+        ? AppColors.primaryGreen
+        : (isMenunggu ? const Color(0xFF1565C0) : const Color(0xFFC62828));
+    final statusBg = isLunas
+        ? const Color(0xFFE8F5E9)
+        : (isMenunggu ? const Color(0xFFE3F2FD) : const Color(0xFFFCE4EC));
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Row(
@@ -929,13 +947,10 @@ class _PembayaranScreenState extends State<PembayaranScreen>
           Container(
             width: 40,
             height: 40,
-            decoration: BoxDecoration(
-              color: isLunas ? const Color(0xFFE8F5E9) : const Color(0xFFFCE4EC),
-              borderRadius: BorderRadius.circular(12),
-            ),
+            decoration: BoxDecoration(color: statusBg, borderRadius: BorderRadius.circular(12)),
             child: Icon(
-              isLunas ? Icons.check_circle_rounded : Icons.cancel_rounded,
-              color: isLunas ? AppColors.primaryGreen : const Color(0xFFC62828),
+              isLunas ? Icons.check_circle_rounded : (isMenunggu ? Icons.hourglass_top_rounded : Icons.cancel_rounded),
+              color: statusColor,
               size: 20,
             ),
           ),
@@ -944,108 +959,33 @@ class _PembayaranScreenState extends State<PembayaranScreen>
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Iuran $bulan',
+                Text('Iuran ${_formatBulanLabel(r.bulan)}',
                     style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5, color: AppColors.textDark)),
-                Text('Dibayar $tgl', style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
+                Text(
+                  isLunas && r.tanggalBayar != null
+                      ? 'Dibayar ${_formatTanggalSingkat(r.tanggalBayar)}'
+                      : 'Via ${r.metodeBayar}',
+                  style: const TextStyle(fontSize: 12, color: AppColors.textGrey),
+                ),
               ],
             ),
           ),
           Column(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
-              const Text('Rp 50.000',
-                  style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5, color: AppColors.darkGreen)),
+              Text('Rp ${r.nominal.toStringAsFixed(0)}',
+                  style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13.5, color: AppColors.darkGreen)),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: isLunas ? const Color(0xFFE8F5E9) : const Color(0xFFFCE4EC),
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  status,
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: isLunas ? AppColors.primaryGreen : const Color(0xFFC62828),
-                  ),
-                ),
+                decoration: BoxDecoration(color: statusBg, borderRadius: BorderRadius.circular(6)),
+                child: Text(statusLabel,
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: statusColor)),
               ),
             ],
           ),
         ],
       ),
     );
-  }
-
-  // ── CONFIRM BUTTON ────────────────────────────────────────────────────────
-
-  Widget _buildConfirmButton() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 16,
-            offset: const Offset(0, -4),
-          ),
-        ],
-      ),
-      child: SafeArea(
-        top: false,
-        child: GestureDetector(
-          onTap: () {
-            HapticFeedback.heavyImpact();
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Konfirmasi pembayaran dikirim ke admin RT'),
-                backgroundColor: AppColors.primaryGreen,
-              ),
-            );
-          },
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF40916C), Color(0xFF1B4332)],
-              ),
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.primaryGreen.withOpacity(0.4),
-                  blurRadius: 14,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
-                SizedBox(width: 10),
-                Text('Konfirmasi Pembayaran',
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.2)),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ── QR CORNER MARKERS ─────────────────────────────────────────────────────────
-
-class _QRCornerMarkers extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return const SizedBox.shrink();
   }
 }
 
@@ -1075,10 +1015,10 @@ class _ScanResultSheet extends StatelessWidget {
             child: const Icon(Icons.check_rounded, color: AppColors.primaryGreen, size: 34),
           ),
           const SizedBox(height: 14),
-          const Text('QR Berhasil Dipindai!',
+          const Text('Bukti Bayar Terkirim!',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.darkGreen)),
           const SizedBox(height: 8),
-          const Text('Lanjutkan pembayaran di aplikasi\ne-wallet atau m-banking kamu',
+          const Text('Pembayaran kamu sedang menunggu\nverifikasi dari admin RT',
               textAlign: TextAlign.center,
               style: TextStyle(color: AppColors.textGrey, fontSize: 14, height: 1.4)),
           const SizedBox(height: 20),
